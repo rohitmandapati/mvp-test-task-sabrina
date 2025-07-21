@@ -1,28 +1,68 @@
-// This file includes the stub function you will call to generate a reply. Do not implement it. 
-// It also includes the recieving end of the POST function to ensure that he message is received
-// and contains content.
 
+import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
-// Stub utility function
-async function generateText(_prompt: string): Promise<string> {
-    return 'reply message'
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
+
+async function generateAIReply(content: string): Promise<string> {
+  return `AI reply to: "${content}"`
 }
 
-// POST checker
 export async function POST(req: NextRequest) {
-    try {
-        const { content } = await req.json()
-
-        if (!content) {
-            return NextResponse.json({ error: 'Missing `content` field' }, { status: 400 })
-        }   
-
-        const reply = await generateText(content)
-
-        return NextResponse.json({ status: 'ok', reply })
-    } catch (err) {
-        console.error('Edge Function /api/relay error:', err)
-        return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
+  try {
+    const authHeader = req.headers.get('authorization')
+    if (!authHeader) {
+      return NextResponse.json({ error: 'Missing auth header' }, { status: 401 })
     }
+
+    const token = authHeader.replace('Bearer ', '')
+    const { content } = await req.json()
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser(token)
+
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { data: dbUser } = await supabase
+      .from('User')
+      .select('*')
+      .eq('supabaseuid', user.id)
+      .single()
+
+    if (!dbUser) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    }
+
+ 
+    await supabase.from('Message').insert([
+      {
+        userId: dbUser.id,
+        organizationId: dbUser.organizationId,
+        content,
+      },
+    ])
+
+ 
+    const aiReply = await generateAIReply(content)
+
+
+    await supabase.from('Message').insert([
+      {
+        userId: dbUser.id,
+        organizationId: dbUser.organizationId,
+        content: aiReply,
+      },
+    ])
+
+    return NextResponse.json({ status: 'ok', reply: aiReply })
+  } catch (err) {
+    console.error('Error in /api/relay:', err)
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
+  }
 }
